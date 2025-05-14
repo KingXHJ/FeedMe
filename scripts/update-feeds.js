@@ -124,14 +124,39 @@ function loadFeedData(sourceUrl) {
   }
 }
 
-// 生成摘要函数
-async function generateSummary(title, content) {
-  try {
-    // 清理内容 - 移除HTML标签
-    const cleanContent = content.replace(/<[^>]*>?/gm, "");
+// Gemini API请求队列配置（全局控制）
+const PQueue = require('p-queue');
+const retry = require('p-retry');
 
-    // 准备提示词
-    const prompt = `
+// API请求队列配置（全局控制）
+const apiQueue = new PQueue({
+  concurrency: 3, // 最大并发数
+  intervalCap: 15, // 每分钟15次
+  interval: 60 * 1000, // 每分钟间隔
+});
+
+// 重试配置
+const RETRY_CONFIG = {
+  retries: 3,
+  minTimeout: 2000,
+  factor: 2,
+};
+
+// Token估算系数（按字符粗略估算）
+const TOKEN_PER_CHAR = 0.4;
+let currentMinuteTokens = 0;
+let lastResetTime = Date.now();
+
+// 带速率限制的摘要生成
+async function generateSummaryWithLimit(title, content) {
+  // 清理内容 - 添加更严格的清理
+  const cleanContent = content
+    .replace(/<[^>]*>?/gm, "")
+    .replace(/\s{2,}/g, " ")
+    .slice(0, 3000); // 更严格长度限制
+
+  // 准备提示词
+  const prompt = `
 你是一个专业的内容摘要生成器。请根据以下文章标题和内容，生成一个简洁、准确的中文摘要。
 摘要应该：
 1. 捕捉文章的主要观点和关键信息
@@ -145,36 +170,37 @@ async function generateSummary(title, content) {
 文章内容：
 ${cleanContent.slice(0, 5000)} // 限制内容长度以避免超出token限制
 `;
-    
+
+  try {
     const apiUrl = `${GEMINI_API_BASE}${GEMINI_MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
 
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: prompt
-          }]
-        }],
-        generationConfig: {
-          temperature: 0.3,
-          maxOutputTokens: 500
-        }
+    const response = await apiQueue.add(() =>
+      fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 300
+          }
+        })
       })
-    });
+    );
+
+    if (response.status === 429) {
+      throw new retry.AbortError('API速率限制已触发');
+    }
 
     if (!response.ok) {
-      throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
+      throw new Error(`API错误: ${response.status}`);
     }
 
     const data = await response.json();
-    return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "无法生成摘要。";
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "无有效摘要生成";
   } catch (error) {
-    console.error("生成摘要时出错:", error);
-    return "无法生成摘要。AI 模型暂时不可用。";
+    console.error("API请求失败:", error);
+    throw error;
   }
 }
 
@@ -265,11 +291,18 @@ function mergeFeedItems(oldItems = [], newItems = [], maxItems = config.maxItems
   return { mergedItems, newItemsForSummary };
 }
 
-// 更新单个源
+// 更新单个源（新增节流控制）
 async function updateFeed(sourceUrl) {
   console.log(`更新源: ${sourceUrl}`);
-
+  
   try {
+    // 检查token限额
+    const now = Date.now();
+    if (now - lastResetTime > 60 * 1000) {
+      currentMinuteTokens = 0;
+      lastResetTime = now;
+    }
+
     // 获取现有数据
     const existingData = loadFeedData(sourceUrl);
 
@@ -285,23 +318,40 @@ async function updateFeed(sourceUrl) {
 
     console.log(`发现 ${newItemsForSummary.length} 条新条目，来自 ${sourceUrl}`);
 
-    // 为新条目生成摘要
-    const itemsWithSummaries = await Promise.all(
-      mergedItems.map(async (item) => {
-        // 如果是新条目且需要生成摘要
-        if (newItemsForSummary.some((newItem) => newItem.link === item.link) && !item.summary) {
-          try {
-            const summary = await generateSummary(item.title, item.content || item.contentSnippet || "");
-            return { ...item, summary };
-          } catch (err) {
-            console.error(`为条目 ${item.title} 生成摘要时出错:`, err);
-            return { ...item, summary: "无法生成摘要。" };
-          }
+    // 处理摘要生成（带速率控制）
+    const itemsWithSummaries = [];
+    for (const item of mergedItems) {
+      const isNewItem = newItemsForSummary.some(newItem => newItem.link === item.link);
+      
+      if (isNewItem && !item.summary) {
+        // 估算token消耗
+        const promptLength = (item.title + item.content).length;
+        const estimatedTokens = Math.floor(promptLength * TOKEN_PER_CHAR);
+        
+        // 检查token限额
+        if (currentMinuteTokens + estimatedTokens > 900000) { // 保留100k余量
+          console.warn('接近token限额，暂停处理');
+          await delay(60000 - (Date.now() - lastResetTime));
+          currentMinuteTokens = 0;
+          lastResetTime = Date.now();
         }
-        // 否则保持不变
-        return item;
-      }),
-    );
+        
+        try {
+          const summary = await retry(
+            () => generateSummaryWithLimit(item.title, item.content),
+            RETRY_CONFIG
+          );
+          
+          currentMinuteTokens += estimatedTokens;
+          itemsWithSummaries.push({ ...item, summary });
+        } catch (error) {
+          console.error(`为条目生成摘要失败: ${item.title}`, error);
+          itemsWithSummaries.push({ ...item, summary: "摘要生成失败（请稍后重试）" });
+        }
+      } else {
+        itemsWithSummaries.push(item);
+      }
+    }
 
     // 创建新的数据对象
     const updatedData = {
@@ -319,7 +369,7 @@ async function updateFeed(sourceUrl) {
     return updatedData;
   } catch (error) {
     console.error(`更新源 ${sourceUrl} 时出错:`, error);
-    throw new Error(`更新源失败: ${error.message}`);
+    throw error;
   }
 }
 

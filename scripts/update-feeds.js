@@ -124,100 +124,6 @@ function loadFeedData(sourceUrl) {
   }
 }
 
-// 在文件顶部添加速率限制配置
-const RATE_LIMIT = {
-  maxRequests: 15,    // 每分钟最大请求数
-  timeWindow: 60 * 1000 // 时间窗口(毫秒)
-};
-
-// 创建请求队列和计数器
-let requestQueue = [];
-let requestCount = 0;
-let lastRequestTime = Date.now();
-
-// 创建带速率限制的请求处理器
-async function rateLimitedRequest(prompt) {
-  const apiUrl = `${GEMINI_API_BASE}models/${GEMINI_MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
-
-  return new Promise(async (resolve, reject) => {
-    // 将请求加入队列
-    requestQueue.push({
-      prompt,
-      resolve,
-      reject,
-      retries: 0
-    });
-
-    // 处理队列
-    const processQueue = async () => {
-      while (requestQueue.length > 0) {
-        const currentTime = Date.now();
-        const timeSinceLast = currentTime - lastRequestTime;
-
-        // 计算是否需要等待
-        if (requestCount >= RATE_LIMIT.maxRequests && timeSinceLast < RATE_LIMIT.timeWindow) {
-          const waitTime = RATE_LIMIT.timeWindow - timeSinceLast;
-          console.log(`到达速率限制，等待 ${waitTime} 毫秒`);
-          await new Promise(res => setTimeout(res, waitTime));
-          requestCount = 0;
-          lastRequestTime = Date.now();
-        }
-
-        // 取出当前请求
-        const currentReq = requestQueue.shift();
-        try {
-          // 执行实际请求
-          const response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              contents: [{
-                parts: [{
-                  text: currentReq.prompt
-                }]
-              }],
-              generationConfig: {
-                temperature: 0.3,
-                maxOutputTokens: 500
-              }
-            })
-          });
-
-          if (!response.ok) {
-            // 处理429错误 (速率限制)
-            if (response.status === 429) {
-              console.warn('触发速率限制，自动延长等待时间');
-              requestCount = RATE_LIMIT.maxRequests; // 强制进入等待
-              requestQueue.unshift(currentReq); // 重新放回队列开头
-              continue;
-            }
-            throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
-          }
-
-          const data = await response.json();
-          requestCount++;
-          lastRequestTime = Date.now();
-          currentReq.resolve(data);
-        } catch (error) {
-          // 重试逻辑 (最多重试3次)
-          if (currentReq.retries < 3) {
-            console.log(`请求失败，准备重试 (${currentReq.retries + 1}/3)`);
-            currentReq.retries++;
-            requestQueue.unshift(currentReq);
-          } else {
-            currentReq.reject(error);
-          }
-        }
-      }
-    };
-
-    // 触发队列处理
-    processQueue();
-  });
-}
-
 // 生成摘要函数
 async function generateSummary(title, content) {
   try {
@@ -240,7 +146,31 @@ async function generateSummary(title, content) {
 ${cleanContent.slice(0, 5000)} // 限制内容长度以避免超出token限制
 `;
     
-    const data = await rateLimitedRequest(prompt);
+    const apiUrl = `${GEMINI_API_BASE}${GEMINI_MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: prompt
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 500
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
     return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "无法生成摘要。";
   } catch (error) {
     console.error("生成摘要时出错:", error);
@@ -356,20 +286,22 @@ async function updateFeed(sourceUrl) {
     console.log(`发现 ${newItemsForSummary.length} 条新条目，来自 ${sourceUrl}`);
 
     // 为新条目生成摘要
-    const itemsWithSummaries = [];
-    for (const item of mergedItems) {
-      if (newItemsForSummary.some((newItem) => newItem.link === item.link) && !item.summary) {
-        try {
-          const summary = await generateSummary(item.title, item.content || item.contentSnippet || "");
-          itemsWithSummaries.push({ ...item, summary });
-        } catch (err) {
-          console.error(`为条目 ${item.title} 生成摘要时出错:`, err);
-          itemsWithSummaries.push({ ...item, summary: "无法生成摘要。" });
+    const itemsWithSummaries = await Promise.all(
+      mergedItems.map(async (item) => {
+        // 如果是新条目且需要生成摘要
+        if (newItemsForSummary.some((newItem) => newItem.link === item.link) && !item.summary) {
+          try {
+            const summary = await generateSummary(item.title, item.content || item.contentSnippet || "");
+            return { ...item, summary };
+          } catch (err) {
+            console.error(`为条目 ${item.title} 生成摘要时出错:`, err);
+            return { ...item, summary: "无法生成摘要。" };
+          }
         }
-      } else {
-        itemsWithSummaries.push(item);
-      }
-    }
+        // 否则保持不变
+        return item;
+      }),
+    );
 
     // 创建新的数据对象
     const updatedData = {

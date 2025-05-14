@@ -42,7 +42,6 @@ if (fs.existsSync(dotenvPath)) {
 }
 
 const Parser = require('rss-parser');
-const fetch = require('node-fetch');
 
 // 从配置文件中导入RSS源配置
 const { config } = require('../config/rss-config.js');

@@ -58,8 +58,8 @@ const parser = new Parser({
 
 // 从环境变量中获取API配置
 const GEMINI_API_KEY = process.env.LLM_API_KEY;
-const GEMINI_API_BASE = process.env.LLM_API_BASE;
-const GEMINI_MODEL_NAME = process.env.LLM_NAME;
+const GEMINI_API_BASE = process.env.LLM_API_BASE || 'https://generativelanguage.googleapis.com/v1beta/models/';
+const GEMINI_MODEL_NAME = process.env.LLM_NAME || 'gemini-2.0-flash';
 
 // 验证必要的环境变量
 if (!GEMINI_API_KEY) {

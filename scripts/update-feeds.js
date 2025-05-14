@@ -125,7 +125,7 @@ function loadFeedData(sourceUrl) {
 }
 
 // Gemini API请求队列配置（全局控制）
-const PQueue = require('p-queue');
+const { default: PQueue } = require('p-queue');
 const retry = require('p-retry');
 
 // API请求队列配置（全局控制）
@@ -133,6 +133,7 @@ const apiQueue = new PQueue({
   concurrency: 3, // 最大并发数
   intervalCap: 15, // 每分钟15次
   interval: 60 * 1000, // 每分钟间隔
+  carryoverConcurrencyCount: true, // 新增推荐参数
 });
 
 // 重试配置

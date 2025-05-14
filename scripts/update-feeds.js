@@ -126,7 +126,7 @@ function loadFeedData(sourceUrl) {
 
 // Gemini API请求队列配置（全局控制）
 const { default: PQueue } = require('p-queue');
-const retry = require('p-retry');
+const { default: retry } = require('p-retry');
 
 // API请求队列配置（全局控制）
 const apiQueue = new PQueue({
@@ -338,9 +338,18 @@ async function updateFeed(sourceUrl) {
         }
         
         try {
+          // 带重试机制的调用（新增参数校验）
           const summary = await retry(
-            () => generateSummaryWithLimit(item.title, item.content),
-            RETRY_CONFIG
+            async () => {
+              if (!item.title) throw new Error('缺少文章标题');
+              return generateSummaryWithLimit(item.title, item.content);
+            },
+            {
+              ...RETRY_CONFIG,
+              onFailedAttempt: error => {
+                console.log(`第${error.attemptNumber}次尝试失败，剩余重试次数：${error.retriesLeft}`);
+              }
+            }
           );
           
           currentMinuteTokens += estimatedTokens;

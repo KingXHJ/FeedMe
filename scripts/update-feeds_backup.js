@@ -42,8 +42,7 @@ if (fs.existsSync(dotenvPath)) {
 }
 
 const Parser = require('rss-parser');
-// OpenAI初始化
-// const { OpenAI } = require('openai');
+const { OpenAI } = require('openai');
 
 // 从配置文件中导入RSS源配置
 const { config } = require('../config/rss-config.js');
@@ -59,31 +58,31 @@ const parser = new Parser({
 });
 
 // 从环境变量中获取API配置
-const GEMINI_API_KEY = process.env.LLM_API_KEY;
-const GEMINI_API_BASE = process.env.LLM_API_BASE;
-const GEMINI_MODEL_NAME = process.env.LLM_NAME;
+const OPENAI_API_KEY = process.env.LLM_API_KEY;
+const OPENAI_API_BASE = process.env.LLM_API_BASE;
+const OPENAI_MODEL_NAME = process.env.LLM_NAME;
 
 // 验证必要的环境变量
-if (!GEMINI_API_KEY) {
+if (!OPENAI_API_KEY) {
   console.error('环境变量LLM_API_KEY未设置，无法生成摘要');
   process.exit(1);
 }
 
-if (!GEMINI_API_BASE) {
+if (!OPENAI_API_BASE) {
   console.error('环境变量LLM_API_BASE未设置，无法生成摘要');
   process.exit(1);
 }
 
-if (!GEMINI_MODEL_NAME) {
+if (!OPENAI_MODEL_NAME) {
   console.error('环境变量LLM_NAME未设置，无法生成摘要');
   process.exit(1);
 }
 
 // 创建OpenAI客户端
-// const openai = new OpenAI({
-//   baseURL: OPENAI_API_BASE,
-//   apiKey: OPENAI_API_KEY,
-// });
+const openai = new OpenAI({
+  baseURL: OPENAI_API_BASE,
+  apiKey: OPENAI_API_KEY,
+});
 
 // 确保数据目录存在
 function ensureDataDir() {
@@ -154,64 +153,24 @@ async function generateSummary(title, content) {
 ${cleanContent.slice(0, 5000)} // 限制内容长度以避免超出token限制
 `;
 
-        // 构造Gemini API请求
-    const response = await fetch(
-      `${GEMINI_API_BASE}${GEMINI_MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: prompt
-            }]
-          }],
-          safetySettings: [{
-            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-            threshold: "BLOCK_NONE"
-          }],
-          generationConfig: {
-            temperature: 0.5,
-            maxOutputTokens: 300
-          }
-        })
-      }
-    );
+    const completion = await openai.chat.completions.create({
+      model: OPENAI_MODEL_NAME,
+      messages: [
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: 0.3,
+      max_tokens: 500,
+    });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`API错误: ${errorData.error.message}`);
-    }
-
-    const responseData = await response.json();
-    
-    // 解析Gemini响应
-    return responseData.candidates?.[0]?.content?.parts?.[0]?.text || "无有效内容";
+    return completion.choices[0].message.content?.trim() || "无法生成摘要。";
   } catch (error) {
     console.error("生成摘要时出错:", error);
-    return "摘要生成服务暂时不可用";
+    return "无法生成摘要。AI 模型暂时不可用。";
   }
 }
-//     const completion = await openai.chat.completions.create({
-//       model: OPENAI_MODEL_NAME,
-//       messages: [
-//         {
-//           role: "user",
-//           content: prompt
-//         }
-//       ],
-//       temperature: 0.3,
-//       max_tokens: 500,
-//     });
-
-//     return completion.choices[0].message.content?.trim() || "无法生成摘要。";
-//   } catch (error) {
-//     console.error("生成摘要时出错:", error);
-//     return "无法生成摘要。AI 模型暂时不可用。";
-//   }
-// }
 
 // 获取RSS源
 async function fetchRssFeed(url) {

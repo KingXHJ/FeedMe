@@ -2,7 +2,7 @@ name: 更新数据并部署
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 */3 * * *'
   push:
     branches: [main, dev]
   workflow_dispatch:

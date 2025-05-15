@@ -133,7 +133,7 @@ const apiQueue = new PQueue({
   concurrency: 3, // 最大并发数
   intervalCap: 15, // 每分钟15次
   interval: 60 * 1000, // 每分钟间隔
-  carryoverConcurrencyCount: true, // 新增推荐参数
+  carryoverConcurrencyCount: false, // 新增推荐参数
 });
 
 // 重试配置

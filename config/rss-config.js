@@ -59,6 +59,11 @@ export const config = {
     //   category: "产品资讯",
     // },
     {
+      name: "中医药学报",
+      url: "https://apps.wanfangdata.com.cn/perios/rss/zyyxb",
+      category: "医学资讯",
+    },
+    {
       name: "LINUX DO 今日热门",
       url: "https://r4l.deno.dev/https://linux.do/top.rss?period=daily",
       category: "论坛",

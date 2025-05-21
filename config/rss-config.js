@@ -104,7 +104,7 @@ export const config = {
       category: "番剧资讯",
     },
   ],
-  maxItemsPerFeed: 30,
+  maxItemsPerFeed: 1000,
   dataPath: "./data",
 }
 

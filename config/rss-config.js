@@ -39,6 +39,11 @@ export const config = {
       category: "科研论文",
     },
     {
+      name: "ArXiv 计算机科学-人工智能",
+      url: "https://rss.arxiv.org/rss/cs.ai",
+      category: "科研论文",
+    },
+    {
       name: "Hugging Face 博客",
       url: "https://rsshub.rssforever.com/huggingface/blog",
       category: "技术博客",
